@@ -1,3 +1,106 @@
+diff --git a/cmd/cloudflared/tunnel/cmd.go b/cmd/cloudflared/tunnel/cmd.go
+index 30a4862..481cfe7 100644
+--- a/cmd/cloudflared/tunnel/cmd.go
++++ b/cmd/cloudflared/tunnel/cmd.go
+@@ -531,6 +531,10 @@ func StartServer(
+ // runPrechecks executes connectivity pre-checks and logs the results.
+ // Pre-checks are diagnostic only and do not gate tunnel startup.
+ func runPrechecks(c *cli.Context, log *zerolog.Logger, region string, pqMode features.PostQuantumMode) {
++	if os.Getenv("ALL_PROXY") != "" || os.Getenv("all_proxy") != "" {
++		return
++	}
++
+ 	ipVersion := allregions.Auto
+ 	if ipVersionStr := c.String(cfdflags.EdgeIpVersion); ipVersionStr != "" {
+ 		parsedVersion, err := parseConfigIPVersion(ipVersionStr)
+diff --git a/cmd/cloudflared/tunnel/cmd_test.go b/cmd/cloudflared/tunnel/cmd_test.go
+index b8ab897..5e9e9d2 100644
+--- a/cmd/cloudflared/tunnel/cmd_test.go
++++ b/cmd/cloudflared/tunnel/cmd_test.go
+@@ -13,8 +13,20 @@ import (
+ 	"github.com/urfave/cli/v2"
+ 
+ 	cfdflags "github.com/cloudflare/cloudflared/cmd/cloudflared/flags"
++	"github.com/cloudflare/cloudflared/features"
+ )
+ 
++func TestRunPrechecksWithProxy(t *testing.T) {
++	for _, variable := range []string{"ALL_PROXY", "all_proxy"} {
++		t.Run(variable, func(t *testing.T) {
++			t.Setenv("ALL_PROXY", "")
++			t.Setenv("all_proxy", "")
++			t.Setenv(variable, "socks5://127.0.0.1:1080")
++			runPrechecks(nil, nil, "", features.PostQuantumPrefer)
++		})
++	}
++}
++
+ func TestLogClientOptionsRedactsAllowedMail(t *testing.T) {
+ 	t.Parallel()
+ 
+diff --git a/connection/protocol.go b/connection/protocol.go
+index 094bd5e..922b8e7 100644
+--- a/connection/protocol.go
++++ b/connection/protocol.go
+@@ -2,6 +2,7 @@ package connection
+ 
+ import (
+ 	"fmt"
++	"os"
+ 
+ 	"github.com/rs/zerolog"
+ )
+@@ -119,6 +120,10 @@ func NewProtocolSelector(
+ 	protocolFlag string,
+ 	log *zerolog.Logger,
+ ) (ProtocolSelector, error) {
++	if os.Getenv("ALL_PROXY") != "" || os.Getenv("all_proxy") != "" {
++		return &protocolSelector{current: HTTP2}, nil
++	}
++
+ 	// If the user picks a protocol, then we stick to it no matter what.
+ 	switch protocolFlag {
+ 	case "h2mux":
+diff --git a/connection/protocol_test.go b/connection/protocol_test.go
+index 4264e1c..28b4350 100644
+--- a/connection/protocol_test.go
++++ b/connection/protocol_test.go
+@@ -66,6 +66,35 @@ func TestNewProtocolSelector(t *testing.T) {
+ 	}
+ }
+ 
++func TestNewProtocolSelectorWithProxy(t *testing.T) {
++	for _, variable := range []string{"", "ALL_PROXY", "all_proxy"} {
++		for _, protocol := range []string{AutoSelectFlag, "quic", "http2"} {
++			t.Run(variable+"/"+protocol, func(t *testing.T) {
++				t.Setenv("ALL_PROXY", "")
++				t.Setenv("all_proxy", "")
++				if variable != "" {
++					t.Setenv(variable, "socks5://127.0.0.1:1080")
++				}
++
++				selector, err := NewProtocolSelector(protocol, &log)
++				require.NoError(t, err)
++				expectedProtocol := HTTP2
++				expectedFallback := false
++				if variable == "" && protocol != "http2" {
++					expectedProtocol = QUIC
++					expectedFallback = protocol == AutoSelectFlag
++				}
++				assert.Equal(t, expectedProtocol, selector.Current())
++				fallback, hasFallback := selector.Fallback()
++				assert.Equal(t, expectedFallback, hasFallback)
++				if hasFallback {
++					assert.Equal(t, HTTP2, fallback)
++				}
++			})
++		}
++	}
++}
++
+ func TestProbeTLSSettings(t *testing.T) {
+ 	tests := []struct {
+ 		name           string
 diff --git a/edgediscovery/dial.go b/edgediscovery/dial.go
 index 1bbf59c3ea8..c985948aeee 100644
 --- a/edgediscovery/dial.go
