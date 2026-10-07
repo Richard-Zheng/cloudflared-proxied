@@ -1,9 +1,14 @@
 # 带 SOCKS5 代理的 cloudflared
 
-本仓库包含对 cloudflared 的 patch, 目的是让 cloudflared 支持 `ALL_PROXY=socks5://127.0.0.1:7080` 走前置代理访问 Cloudflare 边缘节点，以改善直连不佳的情况。
+本仓库让 cloudflared 支持 `ALL_PROXY=socks5://127.0.0.1:7080` 走前置代理访问 Cloudflare 边缘节点，以改善直连不佳的情况。
 
-构建时先应用 `cloudflared_socks.patch`，再运行 `dns_patch.py`，最后使用上游的
-`make cloudflared` 编译。`cloudflared/` 必须是未应用这两个补丁的原始源码。
+`patch_cloudflared.go` 使用 Go AST 定位函数和拨号调用。
+实际的代理实现和回归测试在 `overlay/`；
+环境变量读取、DNS 和 TCP Dial 逻辑集中在 `internal/proxyenv` 包中。
+
+工具会先验证所有目标、格式化所有修改，再开始写文件。`--check` 只检查并列出
+待修改的文件。函数缺失、参数变化、调用不唯一或已经应用修改时会报错，不会写入。
+当前已验证上游提交 `18cdfe0a6fc7b72a0702d255a1f984e776ce0498`。
 
 ## 构建
 
@@ -11,12 +16,17 @@
 git clone --depth 1 https://github.com/cloudflare/cloudflared
 git clone https://github.com/Richard-Zheng/cloudflared-proxied
 
-python3 cloudflared_proxied/dns_patch.py ./cloudflared
-cp cloudflared_proxied/cloudflared_socks.patch cloudflared/
+go run cloudflared-proxied/patch_cloudflared.go --check ./cloudflared
+go run cloudflared-proxied/patch_cloudflared.go ./cloudflared
 cd cloudflared
-git apply cloudflared_socks.patch
 
 make cloudflared
+```
+
+应用 patch 后可运行代理回归测试（先移除测试进程的代理环境变量，避免影响上游测试）：
+
+```sh
+env -u ALL_PROXY -u all_proxy go test -mod=readonly ./internal/proxyenv ./connection ./cmd/cloudflared/tunnel
 ```
 
 ## 使用

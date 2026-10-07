@@ -10,20 +10,16 @@ ENV GO111MODULE=on \
     GOPROXY=${GOPROXY} \
     CONTAINER_BUILD=1
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /go/src/github.com/cloudflare/cloudflared/
 
 COPY cloudflared/go.mod cloudflared/go.sum ./
 RUN go mod download
 
 COPY cloudflared/ ./
-COPY dns_patch.py cloudflared_socks.patch /patches/
+COPY patch_cloudflared.go /patches/
+COPY overlay/ /patches/overlay/
 
-RUN git apply /patches/cloudflared_socks.patch \
-    && python3 /patches/dns_patch.py .
+RUN go run /patches/patch_cloudflared.go .
 
 RUN if [ -n "${VERSION}" ]; then \
         make cloudflared TARGET_OS="${TARGETOS}" TARGET_ARCH="${TARGETARCH}" VERSION="${VERSION}"; \
