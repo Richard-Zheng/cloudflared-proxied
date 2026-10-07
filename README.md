@@ -1,57 +1,47 @@
 # 带 SOCKS5 代理的 cloudflared
 
+本仓库包含对 cloudflared 的 patch, 目的是让 cloudflared 支持 `ALL_PROXY=socks5://127.0.0.1:7080` 走前置代理访问 Cloudflare 边缘节点，以改善直连不佳的情况。
+
 构建时先应用 `cloudflared_socks.patch`，再运行 `dns_patch.py`，最后使用上游的
-`make cloudflared` 编译。`cloudflared/` 必须是未应用这两个补丁的原始源码，
-宿主机不需要安装 Go 或 Python。
-
-## Dockerfile 的区别
-
-| 文件 | 用途 |
-| --- | --- |
-| `Dockerfile` | 使用 BuildKit / Buildx 自动选择目标架构，也支持构建多架构镜像。 |
-| `Dockerfile.amd64` | 固定构建 Linux amd64，适用于常见 Intel / AMD 服务器。 |
-| `Dockerfile.arm64` | 固定构建 Linux arm64，适用于 ARM 服务器。 |
-
-三个文件均沿用上游的 Go 1.26.8 构建镜像和固定摘要的 Debian 13 distroless
-运行镜像。最终镜像以 `65532:65532` 用户运行，只保留运行所需内容，不包含
-Go、Python 和构建工具。保留上游的 `--no-autoupdate` 入口参数，默认显示版本。
-
-上游的 `Dockerfile.fips.amd64` 和 `Dockerfile.fips.arm64` 是 FIPS 构建，
-需要 Cloudflare 私有的 BoringCrypto Go 构建镜像，因此这里没有提供对应版本。
+`make cloudflared` 编译。`cloudflared/` 必须是未应用这两个补丁的原始源码。
 
 ## 构建
 
-在本目录运行，构建上下文必须是 `cloudflared_proxied/`，不能是里面的
-`cloudflared/`。
-
-amd64：
-
 ```sh
-docker build -f Dockerfile.amd64 -t cloudflared-proxied:amd64 .
-docker run --rm cloudflared-proxied:amd64
+git clone --depth 1 https://github.com/cloudflare/cloudflared
+git clone https://github.com/Richard-Zheng/cloudflared-proxied
+
+python3 ./cloudflared-proxied/dns_patch.py ./cloudflared
+cp ./cloudflared-proxied/cloudflared_socks.patch cloudflared/
+cd cloudflared
+git apply cloudflared_socks.patch
+
+make cloudflared
 ```
 
-arm64：
+## 使用
+
+[快速隧道 - try cloudflare](https://try.cloudflare.com/)
 
 ```sh
-docker build -f Dockerfile.arm64 -t cloudflared-proxied:arm64 .
+ALL_PROXY=socks5://127.0.0.1:7080 cloudflared tunnel --url http://localhost:8000 --output json
 ```
 
-固定架构的 Dockerfile 可在另一种架构的 Linux 主机上交叉编译；运行生成的
-镜像仍需要相应架构的主机或模拟器。
-
-安装了 Docker Buildx 时，也可以使用通用 Dockerfile：
+[本地管理的隧道](https://cloudflaredoc.ubitools.com/tunnel/advanced/local-management/)
 
 ```sh
-docker buildx build --platform linux/amd64 -t cloudflared-proxied:amd64 --load .
-docker buildx build --platform linux/arm64 -t cloudflared-proxied:arm64 --load .
+ALL_PROXY=socks5://127.0.0.1:7080 cloudflared --protocol http2 --config [config.yaml] --no-autoupdate tunnel run [name]
 ```
 
-可通过 `--build-arg VERSION=自定义版本号` 覆盖版本，默认由上游 Makefile
-从源码的 Git 信息生成。模块下载默认使用公共 Go 模块代理，也可通过
-`--build-arg GOPROXY=https://你的模块代理,direct` 覆盖。
+[远端管理的隧道](https://cloudflaredoc.ubitools.com/tunnel/advanced/run-parameters/)
 
-## 通过代理运行
+```sh
+ALL_PROXY=socks5://127.0.0.1:7080 cloudflared --protocol http2 --no-autoupdate tunnel run --token <TOKEN_VALUE>
+```
+
+## Docker 容器
+
+同时提供 Docker 容器版本。
 
 ```sh
 docker run --rm \
